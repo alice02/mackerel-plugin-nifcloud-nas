@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,8 +14,11 @@ import (
 
 	"github.com/aokumasan/nifcloud-sdk-go-v2/nifcloud"
 	"github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
+	"github.com/aws/aws-sdk-go-v2/private/protocol/query/queryutil"
 	mp "github.com/mackerelio/go-mackerel-plugin"
 )
+
+const timestampLayout = "2006-01-02 15:04:05"
 
 // NASPlugin mackerel plugin for NIFCLOUD NAS
 type NASPlugin struct {
@@ -36,6 +40,19 @@ func getLastPoint(client *nas.Client, dimension nas.RequestDimensionsStruct, met
 		EndTime:    nifcloud.Time(now),
 		MetricName: nifcloud.String(metricName),
 	})
+	if err := request.Build(); err != nil {
+		return 0, fmt.Errorf("failed building request: %v", err)
+	}
+	body := url.Values{
+		"Action":  {request.Operation.Name},
+		"Version": {request.Metadata.APIVersion},
+	}
+	if err := queryutil.Parse(body, request.Params, false); err != nil {
+		return 0, fmt.Errorf("failed encoding request: %v", err)
+	}
+	body.Set("StartTime", now.Add(time.Duration(180)*time.Second*-1).Format(timestampLayout)) // 3 min (to fetch at least 1 data-point)
+	body.Set("EndTime", now.Format(timestampLayout))
+	request.SetBufferBody([]byte(body.Encode()))
 
 	response, err := request.Send(context.Background())
 	if err != nil {
