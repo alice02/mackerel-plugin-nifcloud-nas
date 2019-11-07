@@ -1,3 +1,6 @@
+# Output binaries
+/bin/
+
 # Binaries for programs and plugins
 *.exe
 *.dll
