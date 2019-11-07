@@ -1,14 +1,18 @@
 package mpnifcloudnas
 
-
 import (
+	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/aokumasan/nifcloud-sdk-go-v2/nifcloud"
+	"github.com/aokumasan/nifcloud-sdk-go-v2/service/nas"
 	mp "github.com/mackerelio/go-mackerel-plugin"
 )
 
@@ -23,39 +27,43 @@ type NASPlugin struct {
 	LabelPrefix     string
 }
 
-func getLastPoint(client *NasClient, identifier, metricName string) (float64, error) {
+func getLastPoint(client *nas.Client, dimension nas.RequestDimensionsStruct, metricName string) (float64, error) {
 	now := time.Now().In(time.UTC)
-	const layout = "2006-01-02 15:04:05"
-	params := make(map[string]string)
-	params["Dimensions.member.1.Name"] = "NASInstanceIdentifier"
-	params["Dimensions.member.1.Value"] = identifier
-	params["EndTime"] = now.Format(layout)
-	params["StartTime"] = now.Add(time.Duration(180) * time.Second * -1).Format(layout) // 3 min (to fetch at least 1 data-point)
-	params["MetricName"] = metricName
 
-	response, err := client.GetMetricStatistics(params)
+	request := client.GetMetricStatisticsRequest(&nas.GetMetricStatisticsInput{
+		Dimensions: []nas.RequestDimensionsStruct{dimension},
+		StartTime:  nifcloud.Time(now.Add(time.Duration(180) * time.Second * -1)),
+		EndTime:    nifcloud.Time(now),
+		MetricName: nifcloud.String(metricName),
+	})
+
+	response, err := request.Send(context.Background())
 	if err != nil {
 		return 0, err
 	}
 
-	datapoints := response.GetMetricStatisticsResult.Datapoints
+	datapoints := response.Datapoints
 	if len(datapoints) == 0 {
 		return 0, errors.New("fetched no datapoints")
-	}
-	members := datapoints[0].Member
-	if len(members) == 0 {
-		return 0, errors.New("fetched no members")
 	}
 
 	latest := new(time.Time)
 	var latestVal float64
-	for _, m := range members {
-		if m.Timestamp.Before(*latest) {
+	for _, dp := range datapoints {
+		timestamp, err := time.Parse(time.RFC3339, nifcloud.StringValue(dp.Timestamp))
+		if err != nil {
+			return 0, fmt.Errorf("could not parse timestamp %q: %v", nifcloud.StringValue(dp.Timestamp), err)
+		}
+
+		if timestamp.Before(*latest) {
 			continue
 		}
 
-		latest = &m.Timestamp
-		latestVal = float64(m.Sum) / float64(m.SampleCount)
+		latest = &timestamp
+		latestVal, err = strconv.ParseFloat(nifcloud.StringValue(dp.Sum), 64)
+		if err != nil {
+			return 0, fmt.Errorf("could not parse sum %q: %v", nifcloud.StringValue(dp.Sum), err)
+		}
 	}
 	return latestVal, nil
 }
@@ -71,14 +79,18 @@ func (p NASPlugin) nasMetrics() (metrics []string) {
 
 // FetchMetrics interface for mackerel-plugin
 func (p NASPlugin) FetchMetrics() (map[string]float64, error) {
-	client := NewNasClient(p.Region, p.AccessKeyID, p.SecretAccessKey)
+	nasClient := nas.New(nifcloud.NewConfig(p.AccessKeyID, p.SecretAccessKey, p.Region))
+	perInstance := nas.RequestDimensionsStruct{
+		Name:  nifcloud.String("NASInstanceIdentifier"),
+		Value: nifcloud.String(p.Identifier),
+	}
 	stat := make(map[string]float64)
 	var wg sync.WaitGroup
 	for _, met := range p.nasMetrics() {
 		wg.Add(1)
 		go func(met string) {
 			defer wg.Done()
-			v, err := getLastPoint(client, p.Identifier, met)
+			v, err := getLastPoint(nasClient, perInstance, met)
 			if err == nil {
 				stat[met] = v
 			} else {
