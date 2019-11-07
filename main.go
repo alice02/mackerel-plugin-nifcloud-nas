@@ -1,6 +1,6 @@
 package main
 
-import "github.com/alice02/mackerel-plugin-nifcloud-nas/lib"
+import "github.com/aokumasan/mackerel-plugin-nifcloud-nas/lib"
 
 func main() {
 	mpnifcloudnas.Do()
