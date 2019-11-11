@@ -36,10 +36,10 @@ func getLastPoint(client *nas.Client, dimension nas.RequestDimensionsStruct, met
 
 	request := client.GetMetricStatisticsRequest(&nas.GetMetricStatisticsInput{
 		Dimensions: []nas.RequestDimensionsStruct{dimension},
-		StartTime:  nifcloud.Time(now.Add(time.Duration(180) * time.Second * -1)),
-		EndTime:    nifcloud.Time(now),
 		MetricName: nifcloud.String(metricName),
 	})
+
+	// This is workaround for NAS request parameter datetime format
 	if err := request.Build(); err != nil {
 		return 0, fmt.Errorf("failed building request: %v", err)
 	}
